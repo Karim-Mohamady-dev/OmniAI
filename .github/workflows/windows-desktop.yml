@@ -1,0 +1,83 @@
+name: Build Windows Desktop Installer
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+    paths:
+      - 'desktop/**'
+      - 'src/**'
+      - 'package.json'
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install root dependencies, validate, test, and build web bundle
+        run: |
+          npm ci --legacy-peer-deps
+          npm run lint
+          npx vitest run --exclude tests/postgres_live.test.ts
+          npm run build
+
+      - name: Install desktop dependencies and compile Electron main/preload
+        working-directory: desktop
+        run: |
+          npm ci
+          npm run build
+
+      - name: Package Windows NSIS & Portable executables
+        working-directory: desktop
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path release | Out-Null
+          $env:DEBUG = "electron-builder"
+          npm run package:win 2>&1 | Tee-Object -FilePath release/windows-package.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Verify Windows release artifacts, installer binaries, and SHA256 checksums
+        working-directory: desktop
+        shell: pwsh
+        run: |
+          $exes = Get-ChildItem -Path release -Filter "*.exe" -File
+          if ($exes.Count -lt 2) {
+            throw "Expected both NSIS installer (.exe) and portable (.exe) in desktop/release, found $($exes.Count)"
+          }
+          foreach ($exe in $exes) {
+            if ($exe.Length -lt 50MB) {
+              throw "Artifact $($exe.Name) is suspiciously small ($($exe.Length) bytes)"
+            }
+          }
+          if (-not (Test-Path "release/latest.yml")) {
+            throw "Missing release/latest.yml update metadata"
+          }
+          $blockmaps = Get-ChildItem -Path release -Filter "*.blockmap" -File
+          if ($blockmaps.Count -lt 1) {
+            throw "Missing NSIS .blockmap file in desktop/release"
+          }
+          Get-ChildItem -Path release -File | Select-Object Name, Length
+          Get-FileHash -Path "release/*.exe" -Algorithm SHA256 | Out-File -FilePath release/SHA256SUMS.txt -Encoding utf8
+          Get-Content release/SHA256SUMS.txt
+
+      - name: Upload Windows Release Artifacts & Build Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: OmniAI-Studio-Windows-x64
+          path: |
+            desktop/release/*.exe
+            desktop/release/*.blockmap
+            desktop/release/latest.yml
+            desktop/release/SHA256SUMS.txt
+            desktop/release/windows-package.log
+          if-no-files-found: error

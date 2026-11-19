@@ -1,0 +1,14 @@
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+.omniai-data/
+desktop/node_modules/
+desktop/dist/
+desktop/release/
+test-results/
+playwright-report/

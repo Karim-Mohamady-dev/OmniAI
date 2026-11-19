@@ -1,0 +1,77 @@
+name: CI Security, Typecheck & End-to-End Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: omniai_ci
+          POSTGRES_PASSWORD: omniai_ci_password
+          POSTGRES_DB: omniai_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U omniai_ci -d omniai_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://omniai_ci:omniai_ci_password@localhost:5432/omniai_prod_unused
+      TEST_DATABASE_URL: postgresql://omniai_ci:omniai_ci_password@localhost:5432/omniai_test
+      SMOKE_DATABASE_URL: postgresql://omniai_ci:omniai_ci_password@localhost:5432/omniai_test
+      OMNIAI_MASTER_KEY: ci_verification_master_key_32_bytes_min
+      APP_URL: http://127.0.0.1:3000
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install root dependencies deterministically
+        run: npm ci --legacy-peer-deps
+
+      - name: Install desktop dependencies deterministically
+        working-directory: desktop
+        run: npm ci
+
+      - name: Production dependency vulnerability audit
+        run: |
+          npm audit --omit=dev --audit-level=critical
+          npm audit --prefix desktop --omit=dev --audit-level=high
+
+      - name: TypeScript & Desktop main/preload compilation
+        run: |
+          npm run lint
+          npm run build
+          npm --prefix desktop run build
+
+      - name: PostgreSQL DB CLI, migrations & 11-step live release gate
+        run: |
+          npm run db:init -- --test
+          npm run db:migrate -- --test
+          npm run db:status -- --test
+          npm run db:health -- --test
+          npm run test:postgres
+          npm run test:postgres:release
+
+      - name: Run unit, integration, security & performance test suites
+        run: npx vitest run --exclude tests/postgres_live.test.ts
+
+      - name: Run production smoke test against live PostgreSQL test database
+        run: npm run test:smoke
+
+      - name: Run Playwright browser E2E workflow suite
+        run: npx playwright test

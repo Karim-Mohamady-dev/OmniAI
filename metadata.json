@@ -1,0 +1,6 @@
+{
+  "name": "OmniAI Studio",
+  "description": "Unified Multi-Model AI Platform and AI Development Environment with automatic fallback orchestration, Monaco IDE, live sandboxed preview, ZIP export, and GitHub integration.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
