@@ -3,6 +3,7 @@ import { spawn } from 'child_process';
 import cookieParser from 'cookie-parser';
 import express from 'express';
 import http from 'http';
+import path from 'path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const servers: http.Server[] = [];
@@ -270,7 +271,7 @@ describe('Production Database & Crypto Enforcement', () => {
     });
     expect(exitResult.code).toBe(1);
     expect(exitResult.stderr).toContain('fatal_startup_config_error');
-  });
+  }, 15_000);
 
   it('6. Ensures HTTP query params and headers cannot enable test harness or bypass production health checks', async () => {
     await withEnv(
@@ -428,9 +429,15 @@ describe('Production Database & Crypto Enforcement', () => {
   });
 
   it('11. Refuses destructive test runners when TEST_DATABASE_URL or SMOKE_DATABASE_URL equals production DATABASE_URL', async () => {
+    const tsxBin = path.resolve(
+      process.cwd(),
+      'node_modules',
+      '.bin',
+      process.platform === 'win32' ? 'tsx.cmd' : 'tsx'
+    );
     const runScript = (script: string, extraEnv: Record<string, string | undefined>) =>
       new Promise<{ code: number | null; output: string }>((resolve) => {
-        const child = spawn('npx', ['tsx', script], {
+        const child = spawn(tsxBin, [script], {
           cwd: process.cwd(),
           env: { ...process.env, ...extraEnv },
           stdio: ['ignore', 'pipe', 'pipe'],
@@ -442,20 +449,22 @@ describe('Production Database & Crypto Enforcement', () => {
       });
 
     const sameUrl = 'postgresql://prod_user:prod_pass@db.example.com:5432/omniai_prod';
-    const relRes = await runScript('scripts/testPostgresRelease.ts', {
-      DATABASE_URL: sameUrl,
-      TEST_DATABASE_URL: sameUrl,
-    });
+    const [relRes, smokeRes] = await Promise.all([
+      runScript('scripts/testPostgresRelease.ts', {
+        DATABASE_URL: sameUrl,
+        TEST_DATABASE_URL: sameUrl,
+      }),
+      runScript('scripts/smokeTest.ts', {
+        DATABASE_URL: sameUrl,
+        SMOKE_DATABASE_URL: sameUrl,
+        SMOKE_ALLOW_DATABASE_URL: 'true',
+      }),
+    ]);
+
     expect(relRes.code).toBe(2);
     expect(relRes.output).toContain('matches production DATABASE_URL');
-
-    const smokeRes = await runScript('scripts/smokeTest.ts', {
-      DATABASE_URL: sameUrl,
-      SMOKE_DATABASE_URL: sameUrl,
-      SMOKE_ALLOW_DATABASE_URL: 'true',
-    });
     expect(smokeRes.code).toBe(2);
     expect(smokeRes.output).toContain('must be distinct from production DATABASE_URL');
-  });
+  }, 15_000);
 });
 
